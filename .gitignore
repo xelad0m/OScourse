@@ -1,0 +1,40 @@
+# Ignore all
+*
+
+# Unignore all with extensions
+!*.*
+
+# Except these ...
+!.gitignore
+
+!*.py
+!*.ipynb
+!*.r
+!*.R
+
+!*.cpp
+!*.c
+!*.C
+
+!*.asm
+!*.s
+!*.S
+
+!*.sh
+!*.conf
+
+!*.html
+!*.css
+!*.js
+
+!*.sql
+
+!*.md
+
+!Dockerfile
+
+# ...even if they are in subdirectories
+!*/
+
+# Ignore this dir
+OS_online_course

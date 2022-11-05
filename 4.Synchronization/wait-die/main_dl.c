@@ -1,0 +1,126 @@
+
+/* condition variable deadlock sync example (>2 producers causes deadlock) */
+
+#include "thread.h"         // create_thread, destroy_thread, mutex etc
+
+int DEBUG = 1;
+int TRACE = 0;
+
+int get_rand_range(const int min, const int max) {
+    return rand() % (max - min) + min;
+}
+
+/* tests */ 
+
+struct condition cv;
+struct mutex mtx;	
+struct lock print_lock;
+int value = 0;
+int valid_value = 0;
+int done = 0;
+
+struct args_t{	
+	int id; 
+};
+
+void produce(int x)
+{
+	if (DEBUG) printf("IN produce()\n");
+	mutex_lock(&mtx);	
+	while (valid_value)				// пока не забрали предыдущее значение
+		wait(&cv, &mtx);
+	value = x;
+	valid_value = 1;
+	notify_one(&cv);
+	mutex_unlock(&mtx);
+	if (DEBUG) printf("OUT produce()\n");
+}
+
+void finish(void)
+{
+	mutex_lock(&mtx);
+	done = 1;						// флаг для всех, что это последнее значение
+	notify_all(&cv);				// разбудить всех (тут один спит, но по смыслу - будим всех, кто ждем на cv)
+	mutex_unlock(&mtx);
+}
+
+int consume(int *x)
+{
+	if (DEBUG) printf("IN consume()\n");
+	int ret = 0;					// код нештатного возврата (из блокировки вышли, значения не получили)
+	mutex_lock(&mtx);				// блок
+
+	while (!valid_value && !done)	// тут два условия для нормальной работы и последнего значения
+		wait(&cv, &mtx);			// поток получатель - в сон до следующего notify_...
+
+	if (valid_value) {				// на валидном значении value
+		*x = value;					// можно присвоить его общей переменной
+		valid_value = 0;			// флаг, что забрали
+		notify_one(&cv);			// разбудить следующего в очереди (а это у нас в примере один продюсер)
+		ret = 1;					// код штатного возврата
+	}
+	mutex_unlock(&mtx);
+	if (DEBUG) printf("OUT consume()\n");
+	return ret;
+}
+
+int Producer(void *arg)
+{
+	struct args_t *args = (struct args_t *) arg;
+
+	for (int i = 0; i != 10; ++i) {
+		const int x = rand() % 1000 + 1;				// const в рамках блока {}
+		printf("#%d produced %d\n", args->id, x);	
+		produce(x);
+		delay(2000);
+	}
+	finish();
+	return 0;
+}
+
+int Consumer(void *arg)
+{
+	struct args_t *args = (struct args_t *) arg;
+	int x;
+
+	while (consume(&x)) {
+		printf("#%d consumed %d\n", args->id, x);
+	}
+	return 0;
+}
+
+
+int main(void)
+{
+	int num_prod = 3;						// > 2 дедлок
+	int num_cons = 1;						
+	struct thread *threadpointers[MAX_THREADS];
+	struct args_t args[MAX_THREADS];	
+
+	srand(time(NULL));
+
+	mutex_init(&mtx);
+	lock_init(&print_lock);
+	condition_init(&cv); /* инициализировать!!!, иначе очередь ожидания пустая, но проверку проходит как полная -> обращение по 0 адресу */
+
+	for (int i=0; i!=num_prod; ++i) {
+		args[i].id = i;													
+		threadpointers[i] = create_thread(&Producer, (void*)&args[i]);
+	}
+	for (int i=num_prod; i != (num_prod + num_cons); ++i) {
+		args[i].id = i - num_prod;
+		threadpointers[i] = create_thread(&Consumer, (void*)&args[i]);
+	}
+
+    scheduler_setup();
+	for (int i=0; i != (num_prod + num_cons); ++i)
+    	thread_start(threadpointers[i]);
+
+
+	struct threads_list tl;
+	tl.first = &threadpointers[0];			// я не умею в Си...
+	tl.n = num_prod + num_cons;				// засылаем ссылку на все созданные потоки вот как-то так вот...
+	scheduler_idle((void*)&tl);
+
+	return 0;
+}
